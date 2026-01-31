@@ -568,3 +568,424 @@ Service fails immediately (non-retryable)
 Team can see AUTH_FAILURE in results
 Alert on credentials needing refresh
 ```
+
+---
+
+## Test Examples Explained
+
+### Example 1: Healthy API (UP)
+
+**Configuration:**
+```json
+{
+  "name": "Healthy API",
+  "url": "https://httpbin.org/status/200",
+  "method": "GET",
+  "timeout": "PT3S",
+  "expectedStatusMin": 200,
+  "expectedStatusMax": 299,
+  "slowThreshold": "PT2S",
+  "maxRetries": 2
+}
+```
+
+**What Happens:**
+```
+1. Client sends GET to https://httpbin.org/status/200
+2. httpbin.org responds immediately with HTTP 200 OK
+3. Latency: ~100-300ms (well under slowThreshold of 2s)
+4. Status code 200 is within expected range [200-299] ✓
+```
+
+**Result:** 
+- **Status:** UP
+- **Error Category:** NONE
+- **Why:** All checks pass - fast response, correct status code
+
+---
+
+### Example 2: Timeout Test (TIMEOUT)
+
+**Configuration:**
+```json
+{
+  "name": "Timeout API",
+  "url": "https://httpbin.org/delay/5",
+  "method": "GET",
+  "timeout": "PT2S",
+  "expectedStatusMin": 200,
+  "expectedStatusMax": 299,
+  "slowThreshold": "PT1S",
+  "maxRetries": 1
+}
+```
+
+**What Happens:**
+```
+Attempt 1:
+  Time: 0.0s → Send GET to https://httpbin.org/delay/5
+  Time: 0.0s → Server starts 5-second delay
+  Time: 2.0s → Client timeout reached! ❌
+  └─ HttpTimeoutException thrown
+  └─ Server still hasn't responded (still delaying)
+
+Backoff: 200ms
+
+Attempt 2:
+  Time: 2.2s → Retry GET to https://httpbin.org/delay/5
+  Time: 4.2s → Client timeout reached again! ❌
+  └─ HttpTimeoutException thrown
+  
+Total time: ~4.4s (2s + 200ms + 2s)
+```
+
+**Result:**
+- **Status:** DOWN
+- **Error Category:** TIMEOUT
+- **Why:** API delays 5 seconds, but client only waits 2 seconds. Client gives up before server responds.
+
+---
+
+### Example 3: DNS Failure (DNS_FAILURE)
+
+**Configuration:**
+```json
+{
+  "name": "DNS Failure",
+  "url": "https://this-domain-does-not-exist-12345.com/api",
+  "method": "GET",
+  "timeout": "PT3S",
+  "expectedStatusMin": 200,
+  "expectedStatusMax": 299,
+  "slowThreshold": "PT2S",
+  "maxRetries": 1
+}
+```
+
+**What Happens:**
+```
+Attempt 1:
+  1. Client tries to resolve "this-domain-does-not-exist-12345.com"
+  2. DNS lookup fails (domain doesn't exist)
+  3. UnknownHostException thrown immediately ❌
+  4. No HTTP request is even attempted
+
+  └─ DNS_FAILURE is non-retryable
+  └─ No retry attempts made
+  
+Total time: ~100ms (DNS lookup only)
+```
+
+**Result:**
+- **Status:** DOWN
+- **Error Category:** DNS_FAILURE
+- **Why:** Domain doesn't exist in DNS, so connection cannot be established. Fails immediately without retry.
+
+---
+
+### Example 4: HTTP Error (HTTP_ERROR)
+
+**Configuration:**
+```json
+{
+  "name": "Server Error API",
+  "url": "https://httpbin.org/status/500",
+  "method": "GET",
+  "timeout": "PT3S",
+  "expectedStatusMin": 200,
+  "expectedStatusMax": 299,
+  "slowThreshold": "PT2S",
+  "maxRetries": 2
+}
+```
+
+**What Happens:**
+```
+Attempt 1:
+  └─ GET https://httpbin.org/status/500
+  └─ Server responds with HTTP 500 Internal Server Error
+  └─ Status code 500 NOT in expected range [200-299] ❌
+  └─ 500 >= 500 → Retryable error
+
+Backoff: 200ms
+
+Attempt 2:
+  └─ Retry GET
+  └─ Server again responds with HTTP 500 ❌
+  
+Backoff: 400ms
+
+Attempt 3:
+  └─ Retry GET
+  └─ Server again responds with HTTP 500 ❌
+  
+Total attempts: 3 (maxRetries=2 means 3 total attempts)
+```
+
+**Result:**
+- **Status:** DOWN
+- **Error Category:** HTTP_ERROR
+- **Why:** Server returns 5xx error, which is retryable but keeps failing. Status code outside expected range.
+
+---
+
+### Example 5: Auth Failure (AUTH_FAILURE)
+
+**Configuration:**
+```json
+{
+  "name": "Auth Required API",
+  "url": "https://httpbin.org/status/401",
+  "method": "GET",
+  "timeout": "PT3S",
+  "expectedStatusMin": 200,
+  "expectedStatusMax": 299,
+  "slowThreshold": "PT2S",
+  "maxRetries": 1
+}
+```
+
+**What Happens:**
+```
+Attempt 1:
+  └─ GET https://httpbin.org/status/401
+  └─ Server responds with HTTP 401 Unauthorized
+  └─ Special handling: response.getStatusCode() == 401 ❌
+  └─ Classified as AUTH_FAILURE (non-retryable)
+  └─ Return immediately, no retries
+
+Total time: ~150ms (single request only)
+```
+
+**Result:**
+- **Status:** DOWN
+- **Error Category:** AUTH_FAILURE
+- **Why:** 401/403 status codes indicate authentication problem. Retrying won't help (same credentials), so fails immediately.
+
+---
+
+### Example 6: Rate Limit (RATE_LIMIT)
+
+**Configuration:**
+```json
+{
+  "name": "Rate Limited API",
+  "url": "https://httpbin.org/status/429",
+  "method": "GET",
+  "timeout": "PT3S",
+  "expectedStatusMin": 200,
+  "expectedStatusMax": 299,
+  "slowThreshold": "PT2S",
+  "maxRetries": 2
+}
+```
+
+**What Happens:**
+```
+Attempt 1:
+  └─ GET https://httpbin.org/status/429
+  └─ Server responds with HTTP 429 Too Many Requests
+  └─ Special handling: response.getStatusCode() == 429 ❌
+  └─ Classified as RATE_LIMIT (retryable with backoff)
+
+Backoff: 200ms (gives server time to reset rate limit)
+
+Attempt 2:
+  └─ Retry GET
+  └─ Server still responds with 429 ❌
+  
+Backoff: 400ms
+
+Attempt 3:
+  └─ Retry GET
+  └─ Server still responds with 429 ❌
+```
+
+**Result:**
+- **Status:** DOWN
+- **Error Category:** RATE_LIMIT
+- **Why:** Server is rate-limiting requests. Retries with exponential backoff to give server time to reset limits.
+
+---
+
+### Example 7: Invalid JSON (INVALID_JSON)
+
+**Configuration:**
+```json
+{
+  "name": "Invalid JSON API",
+  "url": "https://httpbin.org/html",
+  "method": "GET",
+  "timeout": "PT3S",
+  "expectedStatusMin": 200,
+  "expectedStatusMax": 299,
+  "expectJson": true,
+  "slowThreshold": "PT2S",
+  "maxRetries": 1
+}
+```
+
+**What Happens:**
+```
+Attempt 1:
+  1. GET https://httpbin.org/html
+  2. Server responds with HTTP 200 OK ✓
+  3. Response body: "<!DOCTYPE html><html>..." (HTML content)
+  4. Check: expectJson == true
+  5. Try: objectMapper.readTree(responseBody)
+  6. Fails: JsonParseException (HTML is not valid JSON) ❌
+  7. Classified as INVALID_JSON (non-retryable)
+  
+No retry (parsing won't suddenly succeed)
+```
+
+**Result:**
+- **Status:** DOWN
+- **Error Category:** INVALID_JSON
+- **Why:** Expected JSON but got HTML. Status code is fine, but content type mismatch. Non-retryable.
+
+---
+
+### Example 8: Slow Response (DEGRADED)
+
+**Configuration:**
+```json
+{
+  "name": "Slow API",
+  "url": "https://httpbin.org/delay/2",
+  "method": "GET",
+  "timeout": "PT5S",
+  "expectedStatusMin": 200,
+  "expectedStatusMax": 299,
+  "slowThreshold": "PT1S",
+  "maxRetries": 1
+}
+```
+
+**What Happens:**
+```
+Attempt 1:
+  Time: 0.0s → Send GET to https://httpbin.org/delay/2
+  Time: 0.0s → Server starts 2-second delay
+  Time: 2.0s → Server responds with HTTP 200 OK ✓
+  
+  Latency: 2000ms
+  Check: latencyMs (2000) > slowThreshold (1000) ⚠️
+  └─ Status code is OK (200 in [200-299]) ✓
+  └─ But response is SLOW
+  └─ Marked as DEGRADED (not UP, not DOWN)
+```
+
+**Result:**
+- **Status:** DEGRADED
+- **Error Category:** SLOW_RESPONSE
+- **Why:** API responds successfully but too slowly (2s > 1s threshold). Functional but degraded performance.
+
+---
+
+### Example 9: POST with Request Body
+
+**Configuration:**
+```json
+{
+  "name": "POST Echo API",
+  "url": "https://httpbin.org/post",
+  "method": "POST",
+  "requestBody": "{\"test\": \"data\", \"timestamp\": 1234567890}",
+  "contentType": "application/json",
+  "timeout": "PT3S",
+  "expectedStatusMin": 200,
+  "expectedStatusMax": 299,
+  "expectJson": true,
+  "slowThreshold": "PT2S",
+  "maxRetries": 1
+}
+```
+
+**What Happens:**
+```
+Attempt 1:
+  1. Send POST to https://httpbin.org/post
+     Headers: Content-Type: application/json
+     Body: {"test": "data", "timestamp": 1234567890}
+  
+  2. httpbin.org/post echoes back the request data
+     Response: HTTP 200 OK
+     Body: {"json": {"test": "data", "timestamp": 1234567890}, ...}
+  
+  3. Latency: ~150ms (< slowThreshold 2s) ✓
+  4. Status code: 200 (in [200-299]) ✓
+  5. expectJson: true → Parse response as JSON ✓
+  6. JSON parsing succeeds ✓
+```
+
+**Result:**
+- **Status:** UP
+- **Error Category:** NONE
+- **Why:** POST request succeeds, response is valid JSON, latency is good, status code is expected.
+
+---
+
+### Example 10: Response Body Validation
+
+**Configuration:**
+```json
+{
+  "name": "Body Content Check",
+  "url": "https://httpbin.org/json",
+  "method": "GET",
+  "timeout": "PT3S",
+  "expectedStatusMin": 200,
+  "expectedStatusMax": 299,
+  "expectJson": true,
+  "expectedBodyContains": "slideshow",
+  "slowThreshold": "PT2S",
+  "maxRetries": 1
+}
+```
+
+**What Happens:**
+```
+Attempt 1:
+  1. GET https://httpbin.org/json
+  2. Server responds: HTTP 200 OK
+     Body: {"slideshow": {"author": "Yours Truly", ...}}
+  
+  3. Latency: ~120ms (< slowThreshold 2s) ✓
+  4. Status code: 200 (in [200-299]) ✓
+  5. expectJson: true → Parse response ✓
+  6. JSON parsing succeeds ✓
+  7. expectedBodyContains: "slideshow"
+     └─ Check: response.getBody().contains("slideshow") ✓
+     └─ Found in response body ✓
+```
+
+**Result:**
+- **Status:** UP
+- **Error Category:** NONE
+- **Why:** All validations pass - correct status, valid JSON, contains expected substring "slideshow".
+
+**Alternative Scenario (if body didn't contain "slideshow"):**
+```
+Result would be:
+  Status: DOWN
+  Error Category: HTTP_ERROR
+  Message: "Response body missing expected content"
+```
+
+---
+
+## Summary of Test Examples
+
+| # | Name | Trigger | Error Category | Retryable | Key Learning |
+|---|------|---------|----------------|-----------|--------------|
+| 1 | Healthy API | Normal 200 response | NONE | N/A | Baseline success case |
+| 2 | Timeout | API delay > timeout | TIMEOUT | Yes | Client gives up before server responds |
+| 3 | DNS Failure | Invalid hostname | DNS_FAILURE | No | Connection can't be established |
+| 4 | HTTP Error | 5xx status code | HTTP_ERROR | Yes | Server-side errors get retried |
+| 5 | Auth Failure | 401/403 status | AUTH_FAILURE | No | Credentials problem, retry won't help |
+| 6 | Rate Limit | 429 status code | RATE_LIMIT | Yes | Backoff gives server time to reset |
+| 7 | Invalid JSON | HTML when expecting JSON | INVALID_JSON | No | Content type mismatch |
+| 8 | Slow Response | Latency > threshold | SLOW_RESPONSE | No | Functional but degraded |
+| 9 | POST Body | POST with JSON body | NONE | N/A | Demonstrates request body handling |
+| 10 | Body Validation | Check for substring | NONE | N/A | Validates response content |
