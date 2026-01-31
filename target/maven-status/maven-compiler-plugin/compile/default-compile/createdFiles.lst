@@ -1,0 +1,16 @@
+com\healthcheck\model\ErrorCategory.class
+com\healthcheck\model\CreateTargetRequest.class
+com\healthcheck\model\HealthStatus.class
+com\healthcheck\service\HealthCheckService.class
+com\healthcheck\api\HealthCheckController.class
+com\healthcheck\transport\JavaHttpTransport.class
+com\healthcheck\model\HealthSummaryResponse.class
+com\healthcheck\Application.class
+com\healthcheck\model\Target.class
+com\healthcheck\model\HttpMethod.class
+com\healthcheck\model\UpdateTargetRequest.class
+com\healthcheck\transport\HttpResponseData.class
+com\healthcheck\service\HealthCheckProperties.class
+com\healthcheck\service\CircuitBreakerState.class
+com\healthcheck\transport\HttpTransport.class
+com\healthcheck\model\HealthCheckResult.class

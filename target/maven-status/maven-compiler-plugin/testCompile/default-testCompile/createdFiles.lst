@@ -1,0 +1,4 @@
+com\healthcheck\service\FakeTransport.class
+com\healthcheck\api\HealthCheckControllerTest.class
+com\healthcheck\service\HealthCheckServiceTest.class
+com\healthcheck\service\FakeTransport$TransportOutcome.class

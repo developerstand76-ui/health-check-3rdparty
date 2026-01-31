@@ -1,0 +1,11 @@
+
+  .   ____          _            __ _ _
+ /\\ / ___'_ __ _ _(_)_ __  __ _ \ \ \ \
+( ( )\___ | '_ | '_| | '_ \/ _` | \ \ \ \
+ \\/  ___)| |_)| | | | | || (_| |  ) ) ) )
+  '  |____| .__|_| |_|_| |_\__, | / / / /
+ =========|_|==============|___/=/_/_/_/
+ :: Spring Boot ::                (v3.2.1)
+
+2026-01-30T14:08:19.570-06:00  INFO 35360 --- [health-check-3rdparty] [           main] com.healthcheck.Application              : Starting Application using Java 17.0.12 with PID 35360 (C:\Users\devel\Downloads\health-check-3rdparty\target\health-check-3rdparty-1.0.0.jar started by devel in C:\Users\devel\Downloads\health-check-3rdparty)
+2026-01-30T14:08:19.586-06:00  INFO 35360 --- [health-check-3rdparty] [           main] com.healthcheck.Application              : No active profile set, falling back to 1 default profile: "default"
