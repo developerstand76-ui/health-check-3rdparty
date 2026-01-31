@@ -205,6 +205,130 @@ Return:
 
 ---
 
+## Why Circuit Breaker is Essential
+
+### The Problem Without Circuit Breaker
+
+```
+Without Circuit Breaker:
+Target API is DOWN for 30 minutes
+
+Time: 00:00  POST /api/targets/abc/check
+  └─ Attempt 1: Timeout (200ms backoff)
+  └─ Attempt 2: Timeout (400ms backoff)
+  └─ Attempt 3: Timeout (800ms backoff)
+  └─ Total: ~1.4s to detect failure
+
+Time: 00:30 (Scheduled check)
+  └─ Attempt 1: Timeout ❌ [wasted network call]
+  └─ Attempt 2: Timeout ❌ [wasted network call]
+  └─ Attempt 3: Timeout ❌ [wasted network call]
+  └─ Total: ~1.4s again
+
+Time: 01:00 (Scheduled check)
+  └─ Attempt 1-3: Timeouts ❌ [still wasting resources]
+
+This repeats EVERY 30 seconds, hammering the broken API!
+```
+
+### The Solution With Circuit Breaker
+
+**CircuitBreakerState tracks:**
+```java
+public class CircuitBreakerState {
+    private int consecutiveFailures;  // Count of failures
+    private Instant openUntil;         // When circuit auto-closes
+}
+```
+
+**Protection Logic:**
+```java
+CircuitBreakerState breaker = circuitBreakers.computeIfAbsent(id, key -> new CircuitBreakerState());
+
+if (breaker.isOpen()) {  // ← Check if open BEFORE making HTTP request
+    // Return DOWN immediately without trying!
+    result.setStatus(HealthStatus.DOWN);
+    result.setErrorCategory(ErrorCategory.CIRCUIT_OPEN);
+    return result;
+}
+
+// Only if closed, proceed with HTTP check...
+HealthCheckResult result = attemptWithRetries(target);
+
+// Update breaker based on result
+if (result.getStatus() == HealthStatus.UP) {
+    breaker.recordSuccess();
+} else {
+    breaker.recordFailure(3, 30000);  // Opens after 3 failures for 30s
+}
+```
+
+### Timeline With Circuit Breaker
+
+```
+Time: 00:00 - Failure #1
+  POST /api/targets/abc/check
+  └─ Circuit: CLOSED → Attempt check
+  └─ Result: DOWN (TIMEOUT)
+  └─ recordFailure() → failures=1, circuit CLOSED
+  
+Time: 00:30 - Failure #2 (Scheduled)
+  POST /api/targets/abc/check
+  └─ Circuit: CLOSED → Attempt check
+  └─ Result: DOWN (TIMEOUT)
+  └─ recordFailure() → failures=2, circuit CLOSED
+
+Time: 01:00 - Failure #3 (Scheduled)
+  POST /api/targets/abc/check
+  └─ Circuit: CLOSED → Attempt check
+  └─ Result: DOWN (TIMEOUT)
+  └─ recordFailure() → failures=3 >= threshold(3)
+  └─ Circuit OPENS ✓ openUntil = 01:30
+
+Time: 01:30 (Scheduled check)
+  POST /api/targets/abc/check
+  └─ breaker.isOpen() == true ✓
+  └─ SKIP all retries! Return DOWN immediately (<1ms!)
+  └─ No HTTP requests made! 💚
+
+Time: 01:31 (User request)
+  POST /api/targets/abc/check
+  └─ breaker.isOpen() == true ✓
+  └─ SKIP retries! Return DOWN immediately
+  └─ No wasted network calls!
+
+Time: 01:31 (Circuit auto-closes)
+  └─ openUntil (01:30) < now (01:31)
+  └─ breaker.isOpen() == false
+  └─ Next check will attempt recovery
+```
+
+### Benefits
+
+| Problem | Solution | Benefit |
+|---------|----------|---------|
+| **Hammering broken APIs** | Circuit opens after 3 failures | Stops wasting network bandwidth |
+| **Cascading failures** | Fail fast instead of retrying | Protects downstream systems |
+| **Resource waste** | Skip HTTP entirely when open | Reduces CPU, network, latency |
+| **Recovery** | Auto-closes after 30s | Can detect when API recovers |
+
+### Real-World Impact
+
+**Without Circuit Breaker:**
+- API goes down, service makes 1000s of wasted HTTP calls
+- Increases load on broken API (might make it worse)
+- Depletes connection pools
+- Slow user responses waiting for timeouts
+
+**With Circuit Breaker:**
+- After 3 failures, returns DOWN instantly
+- No more HTTP calls for 30 seconds
+- Allows broken API time to recover
+- Returns results in <1ms instead of timeout duration
+- User gets fast feedback instead of hanging
+
+---
+
 ## Error Classification & Retry Logic
 
 ### Retryable Errors (will retry with exponential backoff)
